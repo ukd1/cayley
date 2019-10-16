@@ -28,18 +28,6 @@ func (class *Class) IsSubClassOf(superClass *Class) bool {
 	return false
 }
 
-// func (class *Class) SuperClasses() {
-// 	// TODO
-// }
-
-// func (class *Class) SubClasses() []*Class {
-// 	out := make([]*Class, 0, len(class.sub))
-// 	for sub := range class.sub {
-// 		out = append(out, sub)
-// 	}
-// 	return out
-// }
-
 // Property represents a RDF Property with the links to classes and other properties
 type Property struct {
 	name   quad.Value
@@ -48,26 +36,6 @@ type Property struct {
 	super  map[*Property]struct{}
 	sub    map[*Property]struct{}
 }
-
-func (property *Property) Domain() *Class {
-	return property.domain
-}
-
-func (property *Property) Range() *Class {
-	return property._range
-}
-
-// func (property *Property) SuperProperties() {
-// 	// TODO
-// }
-
-// func (property *Property) SubProperties() []*Property {
-// 	out := make([]*Property, 0, len(property.sub))
-// 	for sub := range property.sub {
-// 		out = append(out, sub)
-// 	}
-// 	return out
-// }
 
 // IsSubPropertyOf recursively checks whether property is a superProperty
 func (property *Property) IsSubPropertyOf(superProperty *Property) bool {
@@ -94,7 +62,7 @@ func (store *Store) GetClass(name quad.Value) *Class {
 }
 
 // GetProperty returns a class struct for property name, if it doesn't exist in the store then it returns nil
-func (store *Store) GetProperty(name quad.IRI) *Property {
+func (store *Store) GetProperty(name quad.Value) *Property {
 	return store.properties[name]
 }
 
@@ -177,5 +145,89 @@ func (store *Store) ProcessQuad(q quad.Quad) {
 		store.setPropertyDomain(subject, object)
 	case rdfs.Range:
 		store.setPropertyRange(subject, object)
+	}
+}
+
+func (store *Store) deleteClass(class quad.Value) {
+	if _, ok := store.classes[class]; ok {
+		// TODO delete refrences
+		delete(store.classes, class)
+	}
+}
+
+func (store *Store) deleteProperty(property quad.Value) {
+	if p, ok := store.properties[property]; ok {
+		for super := range p.super {
+			delete(super.sub, p)
+		}
+		for sub := range p.sub {
+			delete(sub.super, p)
+		}
+		// TODO delete refrences
+		delete(store.properties, property)
+	}
+}
+
+func (store *Store) deleteClassRelationship(parent quad.Value, child quad.Value) {
+	parentClass := store.GetClass(parent)
+	childClass := store.GetClass(child)
+	if _, ok := parentClass.sub[childClass]; ok {
+		delete(parentClass.sub, childClass)
+		delete(childClass.super, parentClass)
+	}
+}
+
+func (store *Store) deletePropertyRelationship(parent quad.Value, child quad.Value) {
+	parentProperty := store.GetProperty(parent)
+	childProperty := store.GetProperty(child)
+	if _, ok := parentProperty.sub[childProperty]; !ok {
+		delete(parentProperty.sub, childProperty)
+		delete(childProperty.super, parentProperty)
+	}
+}
+
+func (store *Store) unsetPropertyDomain(property quad.Value, domain quad.Value) {
+	p := store.GetProperty(property)
+	class := store.GetClass(domain)
+	// FIXME(iddan): Currently doesn't support multiple domains as they are very rare
+	p.domain = nil
+	delete(class.ownProperties, p)
+}
+
+func (store *Store) unsetPropertyRange(property quad.Value, _range quad.Value) {
+	p := store.GetProperty(property)
+	class := store.GetClass(_range)
+	p._range = nil
+	// FIXME(iddan): Currently doesn't support multiple ranges as they are very rare
+	delete(class.inProperties, p)
+}
+
+// UnprocessQuad is used to delete a quad from the store
+func (store *Store) UnprocessQuad(q quad.Quad) {
+	subject, object := q.Subject, q.Object
+	predicateIRI, ok := q.Predicate.(quad.IRI)
+	if !ok {
+		return
+	}
+	switch predicateIRI {
+	case rdf.Type:
+		objectIRI, ok := object.(quad.IRI)
+		if !ok {
+			return
+		}
+		switch objectIRI {
+		case rdfs.Class:
+			store.deleteClass(subject)
+		case rdf.Property:
+			store.deleteProperty(subject)
+		}
+	case rdfs.SubPropertyOf:
+		store.deletePropertyRelationship(subject, object)
+	case rdfs.SubClassOf:
+		store.deleteClassRelationship(subject, object)
+	case rdfs.Domain:
+		store.unsetPropertyDomain(subject, object)
+	case rdfs.Range:
+		store.unsetPropertyRange(subject, object)
 	}
 }
